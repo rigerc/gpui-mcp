@@ -1,17 +1,76 @@
 use gpui::{
     App, Keystroke, Modifiers, MouseButton as GpuiMouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase, Window, point, px,
+    MouseUpEvent, PlatformInput, ScrollDelta, TouchPhase, Window, point, px,
 };
 use gpui_mcp_protocol::{
     BridgeError, ErrorCode, InputCommand, MAX_KEY_SEQUENCE, MAX_TEXT_BYTES, MouseButton, Point,
     PointerCommand, PointerScrollDelta,
 };
 
+#[cfg(not(feature = "modern-input"))]
+use gpui::ScrollWheelEvent;
+#[cfg(feature = "modern-input")]
+use gpui::{ScrollEvent, ScrollSource};
+
+/// Validates runtime input without leaking an owned string as a 'static key.
+/// New GPUI parses dynamic input with an explicit OS; validation only checks
+/// syntax, while dispatch reparses with the actual running app's platform.
+fn parse_for_validation(source: &str) -> Result<Keystroke, BridgeError> {
+    #[cfg(feature = "modern-input")]
+    let parsed = Keystroke::parse_with_os(source, gpui::OperatingSystem::Linux);
+    #[cfg(not(feature = "modern-input"))]
+    let parsed = Keystroke::parse(source);
+
+    parsed.map_err(|_| invalid("invalid GPUI keystroke syntax"))
+}
+
+fn parse_for_dispatch(source: &str, cx: &App) -> Result<Keystroke, BridgeError> {
+    #[cfg(feature = "modern-input")]
+    let parsed = Keystroke::parse_with_os(source, cx.platform_info().os);
+    #[cfg(not(feature = "modern-input"))]
+    let parsed = {
+        let _ = cx;
+        Keystroke::parse(source)
+    };
+
+    parsed.map_err(|_| invalid("invalid GPUI keystroke syntax"))
+}
+
+fn scroll_input(position: Point, delta: PointerScrollDelta) -> PlatformInput {
+    let delta = match delta {
+        PointerScrollDelta::Pixels { delta_x, delta_y } => {
+            ScrollDelta::Pixels(point(px(delta_x), px(delta_y)))
+        }
+        PointerScrollDelta::Lines { delta_x, delta_y } => {
+            ScrollDelta::Lines(point(delta_x, delta_y))
+        }
+    };
+    #[cfg(feature = "modern-input")]
+    {
+        PlatformInput::Scroll(ScrollEvent {
+            position: native_point(position),
+            delta,
+            modifiers: Modifiers::default(),
+            touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
+        })
+    }
+    #[cfg(not(feature = "modern-input"))]
+    {
+        PlatformInput::ScrollWheel(ScrollWheelEvent {
+            position: native_point(position),
+            delta,
+            modifiers: Modifiers::default(),
+            touch_phase: TouchPhase::Moved,
+        })
+    }
+}
+
 pub(crate) fn validate(command: &InputCommand) -> Result<(), BridgeError> {
     match command {
         InputCommand::Key { keystroke } => {
             validate_text(keystroke)?;
-            Keystroke::parse(keystroke).map_err(|_| invalid("invalid GPUI keystroke syntax"))?;
+            parse_for_validation(keystroke)?;
         }
         InputCommand::KeySequence { keystrokes } => {
             if keystrokes.is_empty() || keystrokes.len() > MAX_KEY_SEQUENCE {
@@ -19,8 +78,7 @@ pub(crate) fn validate(command: &InputCommand) -> Result<(), BridgeError> {
             }
             for keystroke in keystrokes {
                 validate_text(keystroke)?;
-                Keystroke::parse(keystroke)
-                    .map_err(|_| invalid("invalid GPUI keystroke syntax"))?;
+                parse_for_validation(keystroke)?;
             }
         }
         InputCommand::TypeText { text } | InputCommand::ReplaceText { text } => {
@@ -92,19 +150,7 @@ pub(crate) fn dispatch_pointer(
         PointerCommand::ScrollWheel {
             point: position,
             delta,
-        } => PlatformInput::ScrollWheel(ScrollWheelEvent {
-            position: native_point(*position),
-            delta: match delta {
-                PointerScrollDelta::Pixels { delta_x, delta_y } => {
-                    ScrollDelta::Pixels(point(px(*delta_x), px(*delta_y)))
-                }
-                PointerScrollDelta::Lines { delta_x, delta_y } => {
-                    ScrollDelta::Lines(point(*delta_x, *delta_y))
-                }
-            },
-            modifiers: Modifiers::default(),
-            touch_phase: TouchPhase::Moved,
-        }),
+        } => scroll_input(*position, *delta),
     };
     window.dispatch_event(event, cx);
     Ok(())
@@ -128,14 +174,12 @@ pub(crate) fn dispatch_keyboard(
     validate(&command)?;
     match command {
         InputCommand::Key { keystroke } => {
-            let parsed = Keystroke::parse(&keystroke)
-                .map_err(|_| invalid("invalid GPUI keystroke syntax"))?;
+            let parsed = parse_for_dispatch(&keystroke, cx)?;
             window.dispatch_keystroke(parsed, cx);
         }
         InputCommand::KeySequence { keystrokes } => {
             for keystroke in keystrokes {
-                let parsed = Keystroke::parse(&keystroke)
-                    .map_err(|_| invalid("invalid GPUI keystroke syntax"))?;
+                let parsed = parse_for_dispatch(&keystroke, cx)?;
                 window.dispatch_keystroke(parsed, cx);
             }
         }
@@ -221,6 +265,12 @@ mod tests {
     use gpui_mcp_protocol::{InputCommand, MAX_KEY_SEQUENCE, MouseButton, Point, PointerCommand};
 
     use super::{dispatch_pointer, validate};
+
+    #[test]
+    fn accepts_owned_runtime_keystroke_without_static_lifetime() {
+        let owned = format!("ctrl-{}", "a");
+        assert!(validate(&InputCommand::Key { keystroke: owned }).is_ok());
+    }
 
     #[test]
     fn key_sequences_are_bounded_and_fully_validated() {

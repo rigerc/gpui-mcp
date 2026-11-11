@@ -550,6 +550,7 @@ fn validate_descriptor(descriptor: &EndpointDescriptor, descriptor_path: &Path) 
     }
     if descriptor.capabilities.supports(Capability::Screenshot)
         && descriptor.native_window_id.is_none()
+        && !cfg!(target_os = "linux")
     {
         bail!("endpoint advertises screenshots without a native window identifier");
     }

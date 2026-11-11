@@ -8,6 +8,28 @@ scroll and wait on real state. They can also take screenshots and diffs, record
 video, measure frame cost, and edit HTML-authored interfaces while the app runs.
 It works on Windows 11, macOS, and Linux.
 
+On Linux Wayland, the semantic tree and input tools work in-process without
+compositor permissions. A Wayland window has no global identifier, so the server
+picks a screenshot route from the session it runs in; `ping` reports it as
+`screenshot_backend`:
+
+- **Hyprland** (`hyprland`): the server asks Hyprland's IPC socket for the
+  windows the app's process owns and copies that window with the
+  `hyprland_toplevel_export_v1` protocol. Capture is unattended and bound to the
+  process ID the compositor recorded. If the process has several windows, the
+  one with the GPUI client area's size is used, and an ambiguous match fails.
+  Hyprland offers these interfaces to every client in the session, the same
+  trust model as X11 capture.
+- **Other compositors** (`portal`): the interactive XDG Desktop Portal picker,
+  on every request. Portals v3+ enforce window capture; older v2 backends can
+  only present a user-controlled chooser, so the bridge checks that the image
+  has dimensions consistent with the GPUI window. It cannot prove the chosen
+  window's identity or permit unattended capture.
+
+Region screenshots require an exact client-area size match (no decorations).
+Continuous video capture and headless visual test fixtures still require X11.
+There is no out-of-process Wayland input injection.
+
 ## Setup
 
 Install the MCP server and add it to your MCP client:
@@ -196,19 +218,19 @@ Besides Zed's own GPUI, the bridge works with two GPUI releases on crates.io:
 
 | GPUI crate | Used by | Supported versions | Bridge feature |
 | --- | --- | --- | --- |
-| `gpui-pre` | GPUI Kit, `gpui-component` | 0.3.5, 0.3.6, 0.3.7 | `gpui-pre` |
+| `gpui-pre` | GPUI Kit, `gpui-component` | 0.3.5, 0.3.6, 0.3.7, 0.3.8, 0.3.9 | `gpui-pre` |
 | `gpui-ce` | The community fork and apps built on it | 0.2.2 | `gpui-ce` |
 
 Each needs a small set of GPUI patches, which this repository provides. The
 recipes below pull in a patched copy from here.
 
-### GPUI Kit 0.7.0 (`gpui-pre` 0.3.7)
+### GPUI Kit 0.8.0 (`gpui-pre` 0.3.9)
 
 Add this to your workspace's `Cargo.toml`:
 
 ```toml
 [dependencies]
-gpui-kit = "=0.7.0"
+gpui-kit = "=0.8.0"
 gpui-mcp = { git = "https://github.com/themixednuts/gpui-mcp", branch = "main", default-features = false, features = ["gpui-pre"] }
 
 [patch.crates-io]
@@ -290,7 +312,7 @@ patches are kept working.
   `default-features = false, features = ["gpui-pre", "json", "ron"]`. Its CSS
   transitions and animations run on GPUI Kit's `gpui_base::motion`, which it
   resolves to the Kit release matching your gpui-pre (0.6.4+ for 0.3.5 and
-  0.3.6, 0.7 for 0.3.7). Its
+  0.3.6, 0.7 for 0.3.7 and 0.3.8, 0.8 for 0.3.9). Its
   `grid-template-*` support needs the `grid.patch` described below, which the
   `[patch]` recipe already includes.
 

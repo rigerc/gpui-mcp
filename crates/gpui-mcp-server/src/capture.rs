@@ -1,12 +1,32 @@
 use std::time::Duration;
 
+#[cfg(target_os = "linux")]
+mod wayland;
+
 use gpui_mcp_capture::{CaptureGeometry, CaptureTarget, ScreenshotOptions};
 use gpui_mcp_protocol::{
-    BridgeResult, Capability, Operation, Screenshot, ScreenshotTarget, WindowGeometry,
+    BridgeResult, Capability, EndpointDescriptor, Operation, Screenshot, ScreenshotTarget,
+    WindowGeometry,
 };
 use tokio::time::timeout;
 
 use crate::client::BridgeClient;
+
+/// How a screenshot of this endpoint would be taken: `native` for a window
+/// identifier, `hyprland` or `portal` for a Wayland window, or none at all.
+/// The portal route asks the user to choose what to capture on every call.
+pub(crate) fn backend_name(descriptor: &EndpointDescriptor) -> Option<&'static str> {
+    if !descriptor.capabilities.supports(Capability::Screenshot) {
+        return None;
+    }
+    if descriptor.native_window_id.is_some() {
+        return Some("native");
+    }
+    #[cfg(target_os = "linux")]
+    return Some(wayland::backend().name());
+    #[cfg(not(target_os = "linux"))]
+    None
+}
 
 const CAPTURE_WORKER_DEADLINE: Duration = Duration::from_secs(15);
 
@@ -22,6 +42,15 @@ pub(crate) async fn capture(
     let descriptor = client.descriptor();
     if !descriptor.capabilities.supports(Capability::Screenshot) {
         return Err("the application platform does not expose native window capture".to_owned());
+    }
+    if descriptor.native_window_id.is_none() {
+        #[cfg(target_os = "linux")]
+        {
+            let geometry = window_geometry(client).await?;
+            return wayland::screenshot(descriptor.pid, area, geometry).await;
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("the application did not publish a native window identifier".to_owned());
     }
     let window = descriptor
         .native_window_id

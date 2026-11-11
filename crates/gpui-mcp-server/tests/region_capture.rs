@@ -15,6 +15,11 @@
 //! assertion in each case compares the same rectangle of a full window capture
 //! in both capture orders. One channel level of native capture color jitter is
 //! ignored; a shifted crop or a stale visual state still fails.
+//!
+//! A fixture running as a Wayland client has no native window identifier. Under
+//! Hyprland the server still captures it unattended, and the comparison runs.
+//! Elsewhere its screenshots go through the interactive XDG Screenshot portal;
+//! there the test checks the unattended part of the contract and skips the rest.
 
 mod support;
 
@@ -23,6 +28,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
+use gpui_mcp_protocol::{Capability, EndpointDescriptor};
 use image::{Rgba, RgbaImage};
 use serde_json::{Value as JsonValue, json};
 use tempfile::TempDir;
@@ -326,7 +332,22 @@ async fn a_region_crop_carries_the_focus_ring_the_full_window_capture_carries() 
     let fixture = Fixture::start(&endpoints)?;
     let mut server = Server::start(&endpoints, &directory.path().join("artifacts"))?;
 
-    let outcome = measure(&mut server).await;
+    let outcome = async {
+        initialize(&mut server).await?;
+        let backend = capture_backend(&mut server, &endpoints).await?;
+        if backend != CaptureBackend::Native {
+            wayland_contract(&mut server).await?;
+        }
+        if backend == CaptureBackend::Portal {
+            eprintln!(
+                "skipping the pixel comparison: every capture through the screenshot \
+                 portal needs a person to choose the window"
+            );
+            return Ok(());
+        }
+        measure(&mut server).await
+    }
+    .await;
 
     let outcome = outcome.map_err(|error| support::fixture_failure(&fixture.log, &error));
     server.stop().await;
@@ -334,7 +355,79 @@ async fn a_region_crop_carries_the_focus_ring_the_full_window_capture_carries() 
     outcome
 }
 
-async fn measure(server: &mut Server) -> Result<(), String> {
+/// How the server captures the fixture's window, as `ping` reports it.
+#[derive(Debug, Eq, PartialEq)]
+enum CaptureBackend {
+    /// A native window identifier, captured without user involvement.
+    Native,
+    /// A Wayland window under Hyprland, found by process ID and captured
+    /// without user involvement.
+    Hyprland,
+    /// A Wayland window captured through the XDG Screenshot portal, which asks
+    /// a person to choose what to capture on every call.
+    Portal,
+}
+
+/// Read the backend the server reports and check it against the descriptor
+/// the fixture published: only a Wayland window may lack a native identifier.
+async fn capture_backend(server: &mut Server, endpoints: &Path) -> Result<CaptureBackend, String> {
+    let ping = server.call_json("ping", json!({})).await?;
+    let backend = match ping.get("screenshot_backend").and_then(JsonValue::as_str) {
+        Some("native") => CaptureBackend::Native,
+        Some("hyprland") => CaptureBackend::Hyprland,
+        Some("portal") => CaptureBackend::Portal,
+        _ => return Err(format!("ping reports no screenshot backend: {ping}")),
+    };
+
+    let mut descriptors = std::fs::read_dir(endpoints)
+        .map_err(|error| format!("could not list the endpoint directory: {error}"))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        });
+    let (Some(path), None) = (descriptors.next(), descriptors.next()) else {
+        return Err("the endpoint directory does not hold exactly one descriptor".to_owned());
+    };
+    let bytes = std::fs::read(&path)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let descriptor: EndpointDescriptor = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("could not parse {}: {error}", path.display()))?;
+    if !descriptor.capabilities.supports(Capability::Screenshot) {
+        return Err("the fixture advertises no screenshot capability".to_owned());
+    }
+    let native = descriptor.native_window_id.is_some();
+    if native != (backend == CaptureBackend::Native) {
+        return Err(format!(
+            "ping reports the {backend:?} backend for a descriptor whose native window ID is {:?}",
+            descriptor.native_window_id
+        ));
+    }
+    if !native && !cfg!(target_os = "linux") {
+        return Err(
+            "only Linux endpoints may advertise screenshots without a window ID".to_owned(),
+        );
+    }
+    Ok(backend)
+}
+
+/// Wayland screenshots work without a window identifier; recording does not.
+async fn wayland_contract(server: &mut Server) -> Result<(), String> {
+    let recording = server
+        .call(
+            "start_video_recording",
+            json!({ "artifact_name": "wayland.mp4" }),
+        )
+        .await;
+    match recording {
+        Err(error) if error.contains("Wayland video recording is not supported") => Ok(()),
+        Err(error) => Err(format!("recording failed for another reason: {error}")),
+        Ok(result) => Err(format!("a Wayland recording started: {result}")),
+    }
+}
+
+async fn initialize(server: &mut Server) -> Result<(), String> {
     server
         .request(
             "initialize",
@@ -348,8 +441,10 @@ async fn measure(server: &mut Server) -> Result<(), String> {
     server
         .send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }))
         .await?;
-    wait_for_the_fixture(server).await?;
+    wait_for_the_fixture(server).await
+}
 
+async fn measure(server: &mut Server) -> Result<(), String> {
     let tree = server.call_json("get_ui_tree", json!({})).await?;
     let bounds = tree
         .get("nodes")

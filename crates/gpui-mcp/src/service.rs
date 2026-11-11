@@ -359,6 +359,7 @@ impl BridgeHandle {
         automation.attach(window);
         let pid = ProcessId::new(std::process::id()).ok_or(StartError::InvalidProcessId)?;
         let native_window_id = crate::native_window_id(window);
+        let wayland_capture = crate::native_window::is_wayland(window);
         let document_host = Rc::new(DocumentHost::new("document"));
         let resource_host = Rc::new(ResourceHost::new("resource"));
         let command_host = Rc::new(CommandHost::new("command"));
@@ -397,7 +398,7 @@ impl BridgeHandle {
             endpoint,
             token: token.clone(),
             native_window_id,
-            capabilities: endpoint_capabilities(native_window_id),
+            capabilities: endpoint_capabilities(native_window_id, wayland_capture),
         };
         write_descriptor(&endpoint_path, &descriptor)?;
 
@@ -627,7 +628,7 @@ impl BridgeHandle {
     }
 }
 
-fn endpoint_capabilities(native_window_id: Option<NativeWindowId>) -> Capabilities {
+fn endpoint_capabilities(native_window_id: Option<NativeWindowId>, wayland: bool) -> Capabilities {
     Capabilities::new(
         [
             Capability::SemanticTree,
@@ -638,7 +639,9 @@ fn endpoint_capabilities(native_window_id: Option<NativeWindowId>) -> Capabiliti
             Capability::Logs,
         ]
         .into_iter()
-        .chain(native_window_id.is_some().then_some(Capability::Screenshot)),
+        // The Wayland capture backend prompts the user to select a window via
+        // XDG Desktop Portal; it never fabricates a native window identifier.
+        .chain((native_window_id.is_some() || wayland).then_some(Capability::Screenshot)),
     )
 }
 

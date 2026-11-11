@@ -24,6 +24,14 @@ pub(crate) fn id(window: &Window) -> Option<u32> {
     }
 }
 
+/// Whether this window uses a compositor-owned Wayland surface without a native ID.
+pub(crate) fn is_wayland(window: &Window) -> bool {
+    matches!(
+        raw_window_handle::HasWindowHandle::window_handle(window).map(|handle| handle.as_raw()),
+        Ok(RawWindowHandle::Wayland(_))
+    )
+}
+
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 fn appkit_window_number(handle: raw_window_handle::AppKitWindowHandle) -> Option<u32> {

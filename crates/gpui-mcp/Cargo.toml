@@ -21,6 +21,10 @@ gpui-ce = ["dep:gpui_ce"]
 # which would constrain apps that never use it. To run the unit tests against
 # gpui-ce, add `--features gpui_ce/test-support`.
 test-support = ["gpui?/test-support", "gpui_pre?/test-support"]
+# GPUI 0.3.10+ and newer Zed revisions changed dynamic key parsing and
+# PlatformInput::Scroll. Enable this only after resolving such a GPUI release;
+# older gpui-pre and gpui-ce snapshots require the legacy input API.
+modern-input = []
 
 [dependencies]
 async-channel.workspace = true

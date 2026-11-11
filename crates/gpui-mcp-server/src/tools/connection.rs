@@ -54,6 +54,7 @@ impl GpuiMcp {
             "pid": pid,
             "protocol_version": protocol_version,
             "capabilities": client.descriptor().capabilities,
+            "screenshot_backend": crate::capture::backend_name(client.descriptor()),
         })))
     }
 

@@ -27,7 +27,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Current wire protocol version.
-pub const PROTOCOL_VERSION: u16 = 14;
+pub const PROTOCOL_VERSION: u16 = 15;
 /// Maximum accepted request frame, including its four-byte length prefix.
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 /// Maximum accepted response frame. Screenshots are base64 encoded inside it.
@@ -1101,8 +1101,8 @@ pub struct EndpointDescriptor {
     pub token: String,
     /// Stable operating-system window identifier used for native capture.
     ///
-    /// This is absent only when the active platform cannot expose an identifier;
-    /// in that case the screenshot capability must also be absent.
+    /// On Wayland this is absent, and Screenshot may still be advertised:
+    /// the server uses user-mediated XDG Desktop Portal window selection.
     pub native_window_id: Option<NativeWindowId>,
     /// Supported operations.
     pub capabilities: Capabilities,

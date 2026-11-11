@@ -6,11 +6,16 @@ extern crate gpui_pre as gpui;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+#[cfg(not(feature = "modern-input"))]
+use gpui::ScrollWheelEvent;
 use gpui::{
     App, Context, IntoElement, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PlatformInput, Render, ScrollDelta, ScrollWheelEvent, Styled as _,
-    TestAppContext, TouchPhase, Window, div, point, px, size,
+    MouseUpEvent, PlatformInput, Render, ScrollDelta, Styled as _, TestAppContext, TouchPhase,
+    Window, div, point, px, size,
 };
+#[cfg(feature = "modern-input")]
+use gpui::{ScrollEvent, ScrollSource};
+
 use gpui_mcp::{Automation, NodeAction, Role, UiTree, ValueInfo};
 use gpui_mcp_html::{
     Binding, BindingDocument, BindingMode, BindingTarget, ComponentRegistry, ElementId, HandlerId,
@@ -317,15 +322,23 @@ fn dispatch_pointer_test_input(
             );
         }
         TestInput::Scroll { delta_x, delta_y } => {
-            window.dispatch_event(
-                PlatformInput::ScrollWheel(ScrollWheelEvent {
-                    position: center,
-                    delta: ScrollDelta::Pixels(point(px(-*delta_x), px(-*delta_y))),
-                    modifiers: Modifiers::default(),
-                    touch_phase: TouchPhase::Moved,
-                }),
-                cx,
-            );
+            let delta = ScrollDelta::Pixels(point(px(-*delta_x), px(-*delta_y)));
+            #[cfg(feature = "modern-input")]
+            let event = PlatformInput::Scroll(ScrollEvent {
+                position: center,
+                delta,
+                modifiers: Modifiers::default(),
+                touch_phase: TouchPhase::Moved,
+                source: ScrollSource::Pointer,
+            });
+            #[cfg(not(feature = "modern-input"))]
+            let event = PlatformInput::ScrollWheel(ScrollWheelEvent {
+                position: center,
+                delta,
+                modifiers: Modifiers::default(),
+                touch_phase: TouchPhase::Moved,
+            });
+            window.dispatch_event(event, cx);
         }
         TestInput::SetValue { .. } => {
             window.dispatch_event(

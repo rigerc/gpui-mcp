@@ -26,6 +26,8 @@ gpui-pre = [
 ]
 # GPUI test contexts for this crate's tests and for apps testing rendered HTML.
 test-support = ["gpui?/test-support", "gpui_pre?/test-support", "gpui-mcp/test-support"]
+# Opt in when the GPUI dependency is upgraded to 0.3.10+.
+modern-input = ["gpui-mcp/modern-input"]
 dev-watch = ["runtime", "dep:notify", "ron"]
 json = ["dep:serde_json"]
 ron = ["dep:ron"]

@@ -137,7 +137,7 @@ impl GpuiMcp {
             );
         }
         let window = descriptor.native_window_id.ok_or_else(|| {
-            "the application did not publish a native window identifier".to_owned()
+            "Wayland video recording is not supported; use the screenshot tools or an X11 session".to_owned()
         })?;
         let capture_target = CaptureTarget::new(descriptor.pid, window);
         if self
